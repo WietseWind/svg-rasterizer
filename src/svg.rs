@@ -1,9 +1,9 @@
 use resvg::usvg::{self, TreeParsing, Options};
 use resvg::tiny_skia::{Pixmap, Transform};
 use crate::error::{ServiceResult, ServiceError};
-use std::process::Command;
 use tempfile::NamedTempFile;
 use std::io::Write;
+use tokio::process;
 
 pub struct SvgProcessor {
     client: reqwest::Client,
@@ -20,14 +20,14 @@ impl SvgProcessor {
         let svg_data = self.fetch_svg(url).await?;
         log::debug!("Fetched SVG data (first 100 chars): {}", &svg_data[..svg_data.len().min(100)]);
         
-        // Sanitize SVG using svg-hush
-        let sanitized_svg = self.sanitize_svg(&svg_data)?;
+        // Sanitize SVG using svg-hush binary
+        let sanitized_svg = self.sanitize_svg(&svg_data).await?;
         log::debug!("SVG sanitized successfully");
         
         self.convert_to_png(&sanitized_svg, width, height)
     }
 
-    fn sanitize_svg(&self, svg_data: &str) -> ServiceResult<String> {
+    async fn sanitize_svg(&self, svg_data: &str) -> ServiceResult<String> {
         // Create a temporary file for the input SVG
         let mut input_file = NamedTempFile::new()
             .map_err(|e| ServiceError::SvgProcessingError(format!("Failed to create temp file: {}", e)))?;
@@ -36,10 +36,11 @@ impl SvgProcessor {
         input_file.write_all(svg_data.as_bytes())
             .map_err(|e| ServiceError::SvgProcessingError(format!("Failed to write to temp file: {}", e)))?;
 
-        // Run svg-hush
-        let output = Command::new("svg-hush")
+        // Run svg-hush asynchronously
+        let output = process::Command::new("svg-hush")
             .arg(input_file.path())
             .output()
+            .await
             .map_err(|e| ServiceError::SvgProcessingError(format!("Failed to run svg-hush: {}", e)))?;
 
         if !output.status.success() {

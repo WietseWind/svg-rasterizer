@@ -63,4 +63,17 @@ impl RedisCache {
             
         Ok(count)
     }
+
+    pub async fn check_connection(&self) -> ServiceResult<()> {
+        let mut conn = self.client.get_async_connection()
+            .await
+            .map_err(|e| ServiceError::CacheError(format!("Redis connection failed: {}", e)))?;
+
+        redis::cmd("PING")
+            .query_async::<_, String>(&mut conn)
+            .await
+            .map_err(|e| ServiceError::CacheError(format!("Redis PING failed: {}", e)))?;
+
+        Ok(())
+    }
 }

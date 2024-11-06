@@ -2,7 +2,6 @@ use actix_web::{web, HttpResponse};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::json;
 
 use crate::cache::RedisCache;
 use crate::rate_limit::RateLimiter;
@@ -17,17 +16,12 @@ pub struct SvgRequest {
     pub height: Option<u32>,
 }
 
-pub async fn health_check() -> ServiceResult<HttpResponse> {
-    log::debug!("Health check requested");
-    Ok(HttpResponse::Ok().json(json!({ "status": "ok" })))
-}
-
 pub async fn rasterize_svg(
     req: web::Query<SvgRequest>,
-    config: web::Data<Config>,
-    cache: web::Data<Arc<RedisCache>>,
-    rate_limiter: web::Data<RateLimiter>,
-    client: web::Data<reqwest::Client>,
+    config: web::Data<Config>,                    // No Arc wrapper here
+    cache: web::Data<Arc<RedisCache>>,           // Keep Arc wrapper for cache
+    rate_limiter: web::Data<RateLimiter>,        // No Arc wrapper here
+    client: web::Data<reqwest::Client>,          // No Arc wrapper here
 ) -> ServiceResult<HttpResponse> {
     log::info!("Processing SVG request: {:?}", req);
 

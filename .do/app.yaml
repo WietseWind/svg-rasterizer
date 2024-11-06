@@ -1,0 +1,34 @@
+name: svg-rasterizer
+services:
+  - name: web
+    git:
+      branch: main
+      repo_clone_url: https://github.com/yourusername/svg-rasterizer.git
+    build_command: cargo build --release
+    run_command: ./target/release/svg-rasterizer
+    envs:
+      - key: REDIS_URL
+        value: ${redis.DATABASE_URL}
+      - key: PORT
+        value: ${app.PORT}
+      - key: RUST_LOG
+        value: "info"
+    # Use a custom Dockerfile for building
+    dockerfile_path: Dockerfile
+    instance_count: 1
+    instance_size_slug: basic-xs
+    http_port: 8080
+    routes:
+      - path: /
+    health_check:
+      http_path: /health
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 3
+      success_threshold: 1
+
+databases:
+  - engine: REDIS
+    name: redis
+    version: "6.x"
+    production: false # Set to true for production
