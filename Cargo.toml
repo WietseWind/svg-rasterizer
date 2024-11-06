@@ -1,0 +1,19 @@
+[package]
+name = "svg-rasterizer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.4"
+tokio = { version = "1.0", features = ["full"] }
+resvg = "0.35"
+tiny-skia = "0.10"
+usvg = "0.35"
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+redis = { version = "0.23", features = ["tokio-comp", "aio"] }
+thiserror = "1.0"
+env_logger = "0.10"
+log = "0.4"
+tempfile = "3.8"
