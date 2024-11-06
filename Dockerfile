@@ -25,7 +25,7 @@ FROM debian:bullseye-slim
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl1.1 \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the svg-hush binary from builder
