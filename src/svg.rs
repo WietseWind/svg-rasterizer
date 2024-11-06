@@ -1,9 +1,12 @@
 use resvg::usvg::{self, TreeParsing, Options};
 use resvg::tiny_skia::{Pixmap, Transform};
 use crate::error::{ServiceResult, ServiceError};
-use tempfile::NamedTempFile;
-use std::io::Write;
-use tokio::process;
+use bytes::Bytes;
+use futures::StreamExt;
+
+// Constants for size limits
+const MAX_SVG_SIZE: usize = 1024 * 1024; // 1MB
+const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024; // 5MB safety limit
 
 pub struct SvgProcessor {
     client: reqwest::Client,
@@ -18,42 +21,41 @@ impl SvgProcessor {
 
     pub async fn process(&self, url: &str, width: u32, height: u32) -> ServiceResult<Vec<u8>> {
         let svg_data = self.fetch_svg(url).await?;
-        log::debug!("Fetched SVG data (first 100 chars): {}", &svg_data[..svg_data.len().min(100)]);
+        log::debug!("Fetched SVG data (size: {} bytes)", svg_data.len());
         
-        // Sanitize SVG using svg-hush binary
-        let sanitized_svg = self.sanitize_svg(&svg_data).await?;
-        log::debug!("SVG sanitized successfully");
-        
-        self.convert_to_png(&sanitized_svg, width, height)
-    }
-
-    async fn sanitize_svg(&self, svg_data: &str) -> ServiceResult<String> {
-        // Create a temporary file for the input SVG
-        let mut input_file = NamedTempFile::new()
-            .map_err(|e| ServiceError::SvgProcessingError(format!("Failed to create temp file: {}", e)))?;
-        
-        // Write SVG data to temp file
-        input_file.write_all(svg_data.as_bytes())
-            .map_err(|e| ServiceError::SvgProcessingError(format!("Failed to write to temp file: {}", e)))?;
-
-        // Run svg-hush asynchronously
-        let output = process::Command::new("svg-hush")
-            .arg(input_file.path())
-            .output()
-            .await
-            .map_err(|e| ServiceError::SvgProcessingError(format!("Failed to run svg-hush: {}", e)))?;
-
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr);
-            return Err(ServiceError::SvgProcessingError(format!("svg-hush failed: {}", error)));
+        // Check SVG size before processing
+        if svg_data.len() > MAX_SVG_SIZE {
+            return Err(ServiceError::ValidationError(
+                format!("SVG file too large: {} bytes (max {})", svg_data.len(), MAX_SVG_SIZE)
+            ));
         }
-
-        // Convert output to string
-        String::from_utf8(output.stdout)
-            .map_err(|e| ServiceError::SvgProcessingError(format!("Invalid UTF-8 in svg-hush output: {}", e)))
+        
+        self.convert_to_png(&svg_data, width, height)
     }
 
     async fn fetch_svg(&self, url: &str) -> ServiceResult<String> {
+        // First, do a HEAD request to check content-length
+        let head_resp = self.client
+            .head(url)
+            .send()
+            .await
+            .map_err(ServiceError::RequestError)?;
+
+        // Check content-length if available
+        if let Some(length) = head_resp.headers().get("content-length") {
+            let size = length.to_str()
+                .unwrap_or("0")
+                .parse::<usize>()
+                .unwrap_or(0);
+
+            if size > MAX_SVG_SIZE {
+                return Err(ServiceError::ValidationError(
+                    format!("SVG file too large: {} bytes (max {})", size, MAX_SVG_SIZE)
+                ));
+            }
+        }
+
+        // Now fetch the actual content with streaming
         let response = self.client
             .get(url)
             .send()
@@ -72,14 +74,43 @@ impl SvgProcessor {
             .unwrap_or("");
             
         log::debug!("Response content-type: {}", content_type);
+
+        // Stream the response with size limit
+        let mut total_size = 0;
+        let mut chunks = Vec::new();
+
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| ServiceError::RequestError(e))?;
+            total_size += chunk.len();
+
+            // Check running total against limit
+            if total_size > MAX_RESPONSE_SIZE {
+                return Err(ServiceError::ValidationError(
+                    format!("Response too large: exceeded {} bytes", MAX_RESPONSE_SIZE)
+                ));
+            }
+
+            chunks.push(chunk);
+        }
+
+        // Combine chunks and convert to string
+        let bytes: Bytes = chunks.into_iter().flatten().collect();
+        let text = String::from_utf8(bytes.to_vec())
+            .map_err(|e| ServiceError::SvgProcessingError(format!("Invalid UTF-8 content: {}", e)))?;
         
-        let text = response.text()
-            .await
-            .map_err(|e| ServiceError::SvgProcessingError(e.to_string()))?;
-            
+        // Basic SVG validation
         if !text.contains("<svg") {
-            return Err(ServiceError::SvgProcessingError(
+            return Err(ServiceError::ValidationError(
                 "Response does not contain SVG content".to_string()
+            ));
+        }
+
+        // Additional SVG validation
+        if text.contains("<script") || text.contains("javascript:") {
+            return Err(ServiceError::ValidationError(
+                "SVG contains potentially unsafe content".to_string()
             ));
         }
         
